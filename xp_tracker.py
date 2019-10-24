@@ -9,14 +9,16 @@ import urllib.request
 import urllib.error
 import asyncio
 import time
+import math
 
 
 # think of xp like negative indexes of days
 #
 # guilds = { guild_name:{
-#                       "xp":[ {"date":date, "level":level,"xp":xp },
-#                               {"date":date, "level":level,"xp":xp },
-#                               ..., {"date":date, "level":level,"xp":xp } ],
+#                       "xp":[
+# filled with               {"type":"level", "date":date, "level":level,"xp":xp },
+# 2 types                   {"type":"leader", "date":date,"xp":total_xp_earned },
+#                           ..., {"type":"level", "date":date, "level":level,"xp":xp } ],
 #                       "channel": channel
 #                       }
 #           }
@@ -29,6 +31,7 @@ def read_xp_chart():
     return chart
 
 
+leaderboard_cache = ['cache']
 guilds = dict()
 CYCLES_PER_UPDATE = 1
 PREFIX = "t!"
@@ -101,9 +104,24 @@ def read():
         guilds[element] = loaded[element]
 
 
+def fetch_leaderboard():
+    try_number = 0
+    while try_number < 5:
+        try:
+            guild_data = loads(urllib.request.urlopen(
+                "https://api.wynncraft.com/public_api.php?action=statsLeaderboard&type=guild&timeframe=alltime").readline().decode(
+                "utf-8"))
+            return guild_data
+        except:
+            await asyncio.sleep(10)
+        try_number += 1
+    raise Exception("FetchDataFailure")
+
+
 async def begin():
     await client.get_channel(BEGIN_CHANNEL).send("begun")
     read()
+    leaderboard_cache[0] = fetch_leaderboard()
     begun[0] = True
     while True:
         start = time.time()
@@ -122,14 +140,27 @@ async def begin():
                 past_level = past['level']
                 past_xp = past['xp']
 
-                guilds[guild_name]["xp"].append({"date": current_date, "level": current_level, "xp": current_xp})
+                guilds[guild_name]["xp"].append(
+                    {"type": "level", "date": current_date, "level": current_level, "xp": current_xp})
 
+                # get xp earned in the last cycle
                 await client.get_channel(guilds[guild_name]["channel"]).send(
-                    get_xp_earned(past_date, past_level, past_xp, current_date, current_level, current_xp))
+                    get_LL_xp_earned(past_date, past_level, past_xp, current_date, current_level, current_xp))
+        write()
         await asyncio.sleep(60 - (time.time() - start))
 
 
-def get_xp_earned(past_date, past_level, past_xp, current_date, current_level, current_xp):
+def get_LL_xp_earned(past_date, past_level, past_xp, current_date, current_level, current_xp):
+    '''
+    get_level_level_xp_earned
+    :param past_date:
+    :param past_level:
+    :param past_xp:
+    :param current_date:
+    :param current_level:
+    :param current_xp:
+    :return:
+    '''
     if past_level > current_level:
         return "Past level is greater than current level? O.o"
     xp_earned = 0
@@ -140,9 +171,10 @@ def get_xp_earned(past_date, past_level, past_xp, current_date, current_level, c
         past_level += 1
         past_xp = 0
     xp_earned += ((current_xp - past_xp) / 100) * xp_chart[current_level]
-    return "xp earned in " + str(
-        (datetime.fromtimestamp(int(current_date)) - datetime.fromtimestamp(int(past_date))).total_seconds() / (
-                60 * 60)) + " days = " + str(xp_earned)
+    days = str(
+        int(((datetime.fromtimestamp(int(current_date)) - datetime.fromtimestamp(int(past_date))).total_seconds() / (
+                60 * 60 * 24)) * 100) / 100)
+    return "xp earned in " + days + " days = " + str(int(xp_earned))
 
 
 async def end(message):
@@ -173,9 +205,9 @@ async def create(message):
     except:
         await message.channel.send("Failed to get data for: \"" + guild_name + "\"")
         return
-    guilds[guild_name] = {"xp": [{"date": time.time(), "level": guild_data["level"], "xp": guild_data["xp"]}],
-                          "channel": message.channel.id,
-                          "time": 0}
+    guilds[guild_name] = {
+        "xp": [{"type": "level", "date": time.time(), "level": guild_data["level"], "xp": guild_data["xp"]}],
+        "channel": message.channel.id, "time": 0}
     write()
     await message.channel.send(guild_name + " created")
 
